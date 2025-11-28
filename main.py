@@ -3,7 +3,7 @@ import sys
 import logging
 from config import Config
 from utils.logging import setup_logging
-from utils.document_processing.processor import process_files, update_document
+from utils.document_processing.vision_processor import process_files_with_vision, apply_updates_to_document
 
 # Load configuration
 config = Config()
@@ -11,10 +11,10 @@ for key, value in config.get_env_vars().items():
     os.environ[key] = value
 
 # Set up logging
-logger = setup_logging(level=logging.ERROR)  # Only show ERROR logs
+logger = setup_logging(level=logging.INFO)  # Show INFO logs for vision processing
 
 def main(docx_path=None, excel_path=None):
-    """Main entry point."""
+    """Main entry point using vision-based processing."""
     # If no paths provided, try to get them from command line
     if docx_path is None or excel_path is None:
         if len(sys.argv) != 3:
@@ -24,21 +24,32 @@ def main(docx_path=None, excel_path=None):
         excel_path = sys.argv[2]
     
     try:
-        # Process files to find matches
-        results = process_files(docx_path, excel_path)
+        print("\n" + "="*80)
+        print("SYNCSPACE ALGO - VISION-BASED DOCUMENT PROCESSING")
+        print("="*80)
+        
+        # Process files using vision AI
+        results = process_files_with_vision(docx_path, excel_path)
         
         # Print results if running as script
         if __name__ == "__main__":
             if results:
                 print(f"\nFound {len(results)} changes:")
-                for i, (orig, mod, conf) in enumerate(results, 1):
+                for i, (orig, mod, conf, desc) in enumerate(results, 1):
                     print(f"\nChange {i} (confidence: {conf:.1%}):")
-                    print("Original:", orig)
-                    print("Modified:", mod)
+                    print(f"Description: {desc}")
+                    print(f"Original: {orig[:100]}...")
+                    print(f"Modified: {mod[:100]}...")
+            else:
+                print("\nNo changes found.")
         
         # Update document with changes
         output_path = docx_path.replace('.docx', '_updated.docx')
-        changes_made = update_document(docx_path, results, output_path)
+        changes_made = apply_updates_to_document(docx_path, output_path, results, min_confidence=0.7)
+        
+        print(f"\nMade {changes_made} changes")
+        print(f"Updated document saved to: {output_path}")
+        
         return {
             "status": "success",
             "data": {
@@ -47,8 +58,9 @@ def main(docx_path=None, excel_path=None):
                     {
                         "original_text": orig,
                         "modified_text": mod,
-                        "confidence": float(conf)
-                    } for orig, mod, conf in results
+                        "confidence": float(conf),
+                        "description": desc
+                    } for orig, mod, conf, desc in results
                 ],
                 "output_file_path": output_path
             }
@@ -56,6 +68,8 @@ def main(docx_path=None, excel_path=None):
         
     except Exception as e:
         logger.error(f"Error: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         if __name__ == "__main__":
             sys.exit(1)
         raise e

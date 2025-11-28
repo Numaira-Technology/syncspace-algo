@@ -16,8 +16,9 @@ class BaseConfig:
         },
         "llm": {
             "provider": "openrouter",
-            "model": "google/gemini-3-pro-preview",
-            "timeout": 30
+            "model": "google/gemini-3-pro-preview",  # Default: Gemini 3 (best quality)
+            "fallback_model": "qwen/qwen3-vl-8b-instruct",  # Fallback for geo-restrictions (no thinking mode)
+            "timeout": 60
         }
     }
     

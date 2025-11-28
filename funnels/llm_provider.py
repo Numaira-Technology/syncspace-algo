@@ -13,19 +13,23 @@ logger = logging.getLogger(__name__)
 class OpenRouterProvider:
     """OpenRouter provider using OpenAI SDK with OpenRouter base URL."""
     
-    def __init__(self, model: str, timeout: int = 30):
+    def __init__(self, model: str, timeout: int = 30, fallback_model: Optional[str] = None):
         """Initialize OpenRouter provider.
         
         Args:
             model: Model identifier (e.g., "google/gemini-3-pro-preview")
             timeout: Default timeout in seconds
+            fallback_model: Optional fallback model for geo-restrictions
         """
         api_key = os.getenv('OPENROUTER_API_KEY')
         if not api_key:
             raise ValueError("OPENROUTER_API_KEY environment variable not found")
         
         self.model = model
+        self.fallback_model = fallback_model
+        self.current_model = model  # Track which model is currently in use
         self.default_timeout = timeout
+        self.geo_restricted = False  # Flag to track if primary model is geo-restricted
         
         # Create a custom httpx client without proxies parameter
         # This avoids compatibility issues with httpx 0.28+
@@ -39,14 +43,21 @@ class OpenRouterProvider:
             api_key=api_key,
             http_client=http_client
         )
+        
+        logger.info(f"Initialized OpenRouter with primary model: {model}")
+        if fallback_model:
+            logger.info(f"Fallback model configured: {fallback_model}")
     
-    def _call_openrouter(self, messages: list, max_tokens: int = 200, timeout: Optional[int] = None) -> str:
-        """Call OpenRouter API with proper error handling and logging.
+    def _call_openrouter(self, messages: list, max_tokens: int = 200, timeout: Optional[int] = None, 
+                        image_base64: Optional[str] = None, retry_with_fallback: bool = True) -> str:
+        """Call OpenRouter API with proper error handling and automatic fallback.
         
         Args:
             messages: List of message dictionaries
             max_tokens: Maximum tokens to generate
             timeout: Timeout in seconds (defaults to self.default_timeout)
+            image_base64: Optional base64 encoded image for vision models
+            retry_with_fallback: Whether to retry with fallback model on geo-restriction
             
         Returns:
             Generated text or "none" on error/timeout
@@ -54,20 +65,75 @@ class OpenRouterProvider:
         if timeout is None:
             timeout = self.default_timeout
         
+        # If image is provided, format messages for vision model
+        if image_base64:
+            # Convert text-only messages to vision format
+            vision_messages = []
+            for msg in messages:
+                if msg["role"] == "user":
+                    vision_messages.append({
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": msg["content"]
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{image_base64}"
+                                }
+                            }
+                        ]
+                    })
+                else:
+                    vision_messages.append(msg)
+            messages = vision_messages
+            logger.debug("Formatted messages for vision model with image")
+        
+        # Use fallback model if primary is geo-restricted OR if this is a vision task
+        model_to_use = self.current_model
+        
+        logger.warning(f"🔍 MODEL SELECTION - Initial model: {model_to_use}, Is vision task: {bool(image_base64)}")
+        
+        # CRITICAL: ALWAYS use fallback model (Qwen) for vision tasks
+        # Vision models work better with non-reasoning models
+        if image_base64:
+            if self.fallback_model:
+                logger.warning(f"✅ VISION TASK - Switching to fallback model: {self.fallback_model}")
+                model_to_use = self.fallback_model
+            else:
+                logger.warning(f"⚠️ Vision task detected but no fallback model configured!")
+                logger.warning(f"Using primary model '{model_to_use}' - this may not work optimally")
+        elif self.geo_restricted and self.fallback_model:
+            model_to_use = self.fallback_model
+            logger.warning(f"Using fallback model due to geo-restriction: {model_to_use}")
+        
+        logger.warning(f"🎯 FINAL MODEL: {model_to_use}")
+        
         try:
-            logger.debug(f"Calling OpenRouter API with model {self.model}")
-            logger.debug(f"Messages being sent: {messages}")
+            logger.debug(f"Calling OpenRouter API with model {model_to_use}")
+            if not image_base64:
+                logger.debug(f"Messages being sent: {messages}")
+            else:
+                logger.debug(f"Messages with image (image size: {len(image_base64)} bytes)")
             logger.debug(f"Max tokens: {max_tokens}, Temperature: 0, Timeout: {timeout}")
             
-            # Check if this is a reasoning model (Gemini 3 Pro Preview or DeepSeek)
+            # Check if this is a reasoning model (Gemini 3, DeepSeek, or Qwen Thinking)
+            # NOTE: For vision tasks, we should have already switched to a non-reasoning model above
             extra_body = {}
-            if "gemini-3-pro-preview" in self.model.lower() or "deepseek" in self.model.lower():
+            model_lower_check = model_to_use.lower()
+            
+            # Enable reasoning mode for text-only tasks with reasoning models
+            if not image_base64 and ("gemini-3" in model_lower_check or "deepseek" in model_lower_check or "thinking" in model_lower_check):
                 extra_body = {"reasoning": {"enabled": True}}
-                logger.debug(f"Enabling reasoning mode for model: {self.model}")
+                logger.debug(f"Enabling reasoning mode for text-only model: {model_to_use}")
+            elif image_base64:
+                logger.debug(f"Vision task - using model without reasoning mode: {model_to_use}")
             
             # Use the single client instance - timeout is handled by the API call itself
             response = self.client.chat.completions.create(
-                model=self.model,
+                model=model_to_use,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=0,
@@ -90,10 +156,20 @@ class OpenRouterProvider:
                     logger.debug(f"Reasoning model detected - has reasoning_details")
                     logger.debug(f"Reasoning details: {str(choice.message.reasoning_details)[:200]}...")
                 
+                # Check if there's a 'reasoning' field (some models put response here)
+                if hasattr(choice.message, 'reasoning') and choice.message.reasoning:
+                    logger.debug(f"Model has 'reasoning' field: {str(choice.message.reasoning)[:200]}...")
+                
                 if text is None or text == "":
                     logger.warning(f"Empty or invalid response from API: content is None or empty")
                     logger.warning(f"Finish reason: {choice.finish_reason}")
-                    logger.warning(f"Message object: {choice.message}")
+                    
+                    # Try to extract from reasoning field if available
+                    if hasattr(choice.message, 'reasoning') and choice.message.reasoning:
+                        logger.info("Content is empty, but 'reasoning' field has data - this shouldn't happen for vision tasks!")
+                        logger.info("The model spent all tokens on reasoning instead of the actual answer.")
+                        logger.info("This is likely because reasoning mode was enabled for a vision task.")
+                        # Don't use reasoning as the answer - it's not the structured data we need
                     
                     # Check if there's a refusal or other message fields
                     if hasattr(choice.message, 'refusal') and choice.message.refusal:
@@ -127,16 +203,44 @@ class OpenRouterProvider:
             error_msg = str(e)
             logger.error(f"Error calling OpenRouter API: {error_msg}")
             
-            # If it's a 404 model not found error, provide helpful suggestions
+            # Check for specific error types
             if "404" in error_msg and "No endpoints found" in error_msg:
-                logger.error(f"Model '{self.model}' not found on OpenRouter.")
+                logger.error(f"Model '{model_to_use}' not found on OpenRouter.")
                 logger.error("Common valid models include:")
-                logger.error("  - google/gemini-3-pro-preview (reasoning model)")
-                logger.error("  - deepseek/deepseek-chat-v3.1 (reasoning model, fallback)")
-                logger.error("  - google/gemini-pro-1.5")
-                logger.error("  - anthropic/claude-3-haiku")
-                logger.error("  - meta-llama/llama-3.1-8b-instruct:free")
+                logger.error("  - google/gemini-3-pro-preview (best quality, may have geo-restrictions)")
+                logger.error("  - qwen/qwen3-vl-8b-thinking (good alternative, no geo-restrictions)")
+                logger.error("  - anthropic/claude-3.5-sonnet:beta (no geo-restrictions)")
                 logger.error("Please check https://openrouter.ai/models for available models")
+            
+            elif "User location is not supported" in error_msg or "FAILED_PRECONDITION" in error_msg:
+                logger.warning(f"GEO-RESTRICTION DETECTED: Model '{model_to_use}' is not available in your location.")
+                
+                # Automatic fallback if available and not already using fallback
+                if self.fallback_model and not self.geo_restricted and retry_with_fallback:
+                    logger.info(f"Automatically switching to fallback model: {self.fallback_model}")
+                    self.geo_restricted = True
+                    self.current_model = self.fallback_model
+                    
+                    # Retry with fallback model
+                    return self._call_openrouter(
+                        messages, 
+                        max_tokens=max_tokens, 
+                        timeout=timeout, 
+                        image_base64=image_base64,
+                        retry_with_fallback=False  # Prevent infinite recursion
+                    )
+                else:
+                    logger.error("No fallback model available or fallback already failed.")
+                    logger.error("SOLUTION: Configure a fallback model in config/base_config.py:")
+                    logger.error("  'fallback_model': 'qwen/qwen3-vl-8b-thinking' (recommended)")
+                    logger.error("  'fallback_model': 'anthropic/claude-3-haiku' (alternative)")
+            
+            elif "400" in error_msg or "Bad Request" in error_msg:
+                logger.error("Bad Request - possible causes:")
+                logger.error("  1. Model not available in your region")
+                logger.error("  2. Invalid request format")
+                logger.error("  3. Image too large (try smaller Excel files)")
+                logger.error(f"  Full error: {error_msg[:500]}")
             
             import traceback
             logger.debug(traceback.format_exc())
@@ -160,6 +264,29 @@ class OpenRouterProvider:
             }
         ]
         response = self._call_openrouter(messages, max_tokens=max_tokens, timeout=timeout)
+        return {"analysis": response} if response and response != "none" else {}
+    
+    def analyze_image(self, prompt: str, image_base64: str, timeout: Optional[int] = None, 
+                     max_tokens: int = 257000) -> Dict[str, Any]:
+        """Analyze an image using vision model.
+        
+        Args:
+            prompt: Text prompt describing what to analyze
+            image_base64: Base64 encoded image
+            timeout: Optional timeout in seconds
+            max_tokens: Maximum tokens for output (default: 257K, near model's 262K limit)
+            
+        Returns:
+            Dict with analysis results
+        """
+        messages = [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+        response = self._call_openrouter(messages, max_tokens=max_tokens, timeout=timeout, 
+                                        image_base64=image_base64)
         return {"analysis": response} if response and response != "none" else {}
         
     def compare_text(self, text1: str, text2: str, timeout: Optional[int] = None) -> Dict[str, Any]:
@@ -227,10 +354,15 @@ class LLMProvider:
         llm_config = config.get_model_config()["llm"]
         self.provider = provider or llm_config["provider"]
         self.model = llm_config["model"]
+        self.fallback_model = llm_config.get("fallback_model")
         self.default_timeout = llm_config["timeout"]
         
         if self.provider == "openrouter":
-            self._provider = OpenRouterProvider(self.model, self.default_timeout)
+            self._provider = OpenRouterProvider(
+                self.model, 
+                self.default_timeout, 
+                fallback_model=self.fallback_model
+            )
         else:
             raise ValueError(f"Unsupported provider: {self.provider}. Only 'openrouter' is supported.")
     
@@ -239,6 +371,23 @@ class LLMProvider:
         if timeout is None:
             timeout = self.default_timeout
         return self._provider.analyze_text(text, timeout, max_tokens)
+    
+    def analyze_image(self, prompt: str, image_base64: str, timeout: Optional[int] = None, 
+                     max_tokens: int = 1000) -> Dict[str, Any]:
+        """Analyze an image using vision model.
+        
+        Args:
+            prompt: Text prompt describing what to analyze
+            image_base64: Base64 encoded image
+            timeout: Optional timeout in seconds
+            max_tokens: Maximum tokens for the response
+            
+        Returns:
+            Dict with analysis results
+        """
+        if timeout is None:
+            timeout = self.default_timeout
+        return self._provider.analyze_image(prompt, image_base64, timeout, max_tokens)
     
     def compare_text(self, text1: str, text2: str, timeout: Optional[int] = None) -> Dict[str, Any]:
         """Compare two pieces of text using the configured provider."""

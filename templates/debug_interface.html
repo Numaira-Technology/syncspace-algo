@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SyncSpace Algo - Debug Interface</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+        
+        .steps-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .step-card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            transition: transform 0.3s ease;
+        }
+        
+        .step-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .step-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .step-number {
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5em;
+            font-weight: bold;
+            margin-right: 15px;
+        }
+        
+        .step-title {
+            font-size: 1.4em;
+            color: #333;
+        }
+        
+        .step-description {
+            color: #666;
+            margin-bottom: 20px;
+            line-height: 1.6;
+        }
+        
+        .file-input-wrapper {
+            margin-bottom: 15px;
+        }
+        
+        .file-input-wrapper label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 500;
+        }
+        
+        .file-input-wrapper input[type="file"] {
+            width: 100%;
+            padding: 10px;
+            border: 2px dashed #667eea;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 10px;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: scale(1.02);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .result-container {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            display: none;
+        }
+        
+        .result-container.show {
+            display: block;
+        }
+        
+        .result-success {
+            border-left: 4px solid #28a745;
+        }
+        
+        .result-error {
+            border-left: 4px solid #dc3545;
+        }
+        
+        .result-title {
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #333;
+        }
+        
+        .result-content {
+            color: #666;
+            line-height: 1.6;
+        }
+        
+        .image-preview {
+            margin-top: 15px;
+            max-width: 100%;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        
+        .metrics-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        
+        .metrics-table th,
+        .metrics-table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .metrics-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .loading.show {
+            display: block;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .log-container {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-top: 20px;
+        }
+        
+        .log-title {
+            font-size: 1.4em;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        
+        .log-content {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
+        .confidence-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+        
+        .confidence-high {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .confidence-medium {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .confidence-low {
+            background: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 SyncSpace Algo - Debug Interface</h1>
+            <p>Step-by-step testing and debugging for vision-based document processing</p>
+        </div>
+        
+        <div class="steps-container">
+            <!-- Step 1: Excel to Image -->
+            <div class="step-card">
+                <div class="step-header">
+                    <div class="step-number">1</div>
+                    <div class="step-title">Excel to Image</div>
+                </div>
+                <div class="step-description">
+                    Upload an Excel file to see how it's converted to an image for vision processing.
+                </div>
+                
+                <div class="file-input-wrapper">
+                    <label for="excel-file-step1">Select Excel File (.xlsx)</label>
+                    <input type="file" id="excel-file-step1" accept=".xlsx">
+                </div>
+                
+                <button class="btn btn-primary" onclick="runStep1()">Convert to Image</button>
+                
+                <div class="loading" id="loading-step1">
+                    <div class="spinner"></div>
+                    <p>Converting Excel to image...</p>
+                </div>
+                
+                <div class="result-container" id="result-step1">
+                    <div class="result-title">Result:</div>
+                    <div class="result-content" id="result-content-step1"></div>
+                </div>
+            </div>
+            
+            <!-- Step 2: Vision Extraction -->
+            <div class="step-card">
+                <div class="step-header">
+                    <div class="step-number">2</div>
+                    <div class="step-title">Vision Extraction</div>
+                </div>
+                <div class="step-description">
+                    Test vision AI's ability to extract structured data from the Excel image.
+                </div>
+                
+                <div class="file-input-wrapper">
+                    <label for="image-file-step2">Upload Image (optional - uses Step 1 image)</label>
+                    <input type="file" id="image-file-step2" accept=".png,.jpg,.jpeg">
+                </div>
+                
+                <button class="btn btn-primary" onclick="runStep2()">Extract Data</button>
+                
+                <div class="loading" id="loading-step2">
+                    <div class="spinner"></div>
+                    <p>Extracting data with vision AI...</p>
+                </div>
+                
+                <div class="result-container" id="result-step2">
+                    <div class="result-title">Extracted Data:</div>
+                    <div class="result-content" id="result-content-step2"></div>
+                </div>
+            </div>
+            
+            <!-- Step 3: Full Workflow -->
+            <div class="step-card">
+                <div class="step-header">
+                    <div class="step-number">3</div>
+                    <div class="step-title">Full Workflow</div>
+                </div>
+                <div class="step-description">
+                    Run the complete document processing workflow with both Word and Excel files.
+                </div>
+                
+                <div class="file-input-wrapper">
+                    <label for="docx-file-step3">Word Document (.docx)</label>
+                    <input type="file" id="docx-file-step3" accept=".docx">
+                </div>
+                
+                <div class="file-input-wrapper">
+                    <label for="excel-file-step3">Excel File (.xlsx)</label>
+                    <input type="file" id="excel-file-step3" accept=".xlsx">
+                </div>
+                
+                <button class="btn btn-primary" onclick="runStep3()">Process Documents</button>
+                
+                <div class="loading" id="loading-step3">
+                    <div class="spinner"></div>
+                    <p>Processing documents...</p>
+                </div>
+                
+                <div class="result-container" id="result-step3">
+                    <div class="result-title">Processing Results:</div>
+                    <div class="result-content" id="result-content-step3"></div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Activity Log -->
+        <div class="log-container">
+            <div class="log-title">📋 Activity Log</div>
+            <div class="log-content" id="activity-log">Waiting for actions...</div>
+        </div>
+    </div>
+    
+    <script>
+        function addLog(message, type = 'info') {
+            const log = document.getElementById('activity-log');
+            const timestamp = new Date().toLocaleTimeString();
+            const prefix = type === 'error' ? '❌' : type === 'success' ? '✅' : 'ℹ️';
+            log.textContent += `\n[${timestamp}] ${prefix} ${message}`;
+            log.scrollTop = log.scrollHeight;
+        }
+        
+        function showLoading(step) {
+            document.getElementById(`loading-step${step}`).classList.add('show');
+            document.getElementById(`result-step${step}`).classList.remove('show');
+        }
+        
+        function hideLoading(step) {
+            document.getElementById(`loading-step${step}`).classList.remove('show');
+        }
+        
+        function showResult(step, content, isError = false) {
+            hideLoading(step);
+            const resultDiv = document.getElementById(`result-step${step}`);
+            const contentDiv = document.getElementById(`result-content-step${step}`);
+            
+            resultDiv.classList.add('show');
+            resultDiv.classList.remove('result-success', 'result-error');
+            resultDiv.classList.add(isError ? 'result-error' : 'result-success');
+            contentDiv.innerHTML = content;
+        }
+        
+        async function runStep1() {
+            const fileInput = document.getElementById('excel-file-step1');
+            if (!fileInput.files[0]) {
+                alert('Please select an Excel file');
+                return;
+            }
+            
+            addLog('Step 1: Starting Excel to Image conversion...');
+            showLoading(1);
+            
+            const formData = new FormData();
+            formData.append('excel_file', fileInput.files[0]);
+            
+            try {
+                const response = await fetch('/step1_excel_to_image', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addLog(`Step 1: Success! Image created (${data.image_width}x${data.image_height}px, ${data.image_size_kb}KB)`, 'success');
+                    
+                    const content = `
+                        <p><strong>✅ Excel converted successfully!</strong></p>
+                        <p>Image Size: ${data.image_width} x ${data.image_height} pixels</p>
+                        <p>File Size: ${data.image_size_kb} KB</p>
+                        <img src="${data.image_url}" class="image-preview" alt="Excel Preview">
+                    `;
+                    showResult(1, content);
+                } else {
+                    throw new Error(data.error || 'Unknown error');
+                }
+            } catch (error) {
+                addLog(`Step 1: Error - ${error.message}`, 'error');
+                showResult(1, `<p><strong>❌ Error:</strong> ${error.message}</p>`, true);
+            }
+        }
+        
+        async function runStep2() {
+            addLog('Step 2: Starting vision data extraction...');
+            showLoading(2);
+            
+            const formData = new FormData();
+            const imageFile = document.getElementById('image-file-step2').files[0];
+            if (imageFile) {
+                formData.append('image_file', imageFile);
+                addLog('Step 2: Using uploaded image file');
+            } else {
+                addLog('Step 2: Using image from Step 1');
+            }
+            
+            try {
+                const response = await fetch('/step2_vision_extract', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addLog(`Step 2: Success! Extracted ${data.metrics_count} metrics`, 'success');
+                    
+                    let metricsHtml = '<table class="metrics-table"><tr><th>Metric</th><th>Values</th></tr>';
+                    data.metrics.forEach(metric => {
+                        const valuesStr = Object.entries(metric.values)
+                            .map(([period, value]) => `${period}: ${value.toLocaleString()}`)
+                            .join('<br>');
+                        metricsHtml += `<tr><td><strong>${metric.name}</strong></td><td>${valuesStr}</td></tr>`;
+                    });
+                    metricsHtml += '</table>';
+                    
+                    const content = `
+                        <p><strong>✅ Data extracted successfully!</strong></p>
+                        <p>Metrics Found: ${data.metrics_count}</p>
+                        <p>Time Periods: ${data.time_periods.join(', ')}</p>
+                        <p>Currency: ${data.metadata.currency}</p>
+                        ${metricsHtml}
+                    `;
+                    showResult(2, content);
+                } else {
+                    throw new Error(data.error || 'Unknown error');
+                }
+            } catch (error) {
+                addLog(`Step 2: Error - ${error.message}`, 'error');
+                showResult(2, `<p><strong>❌ Error:</strong> ${error.message}</p>`, true);
+            }
+        }
+        
+        async function runStep3() {
+            const docxFile = document.getElementById('docx-file-step3').files[0];
+            const excelFile = document.getElementById('excel-file-step3').files[0];
+            
+            if (!docxFile || !excelFile) {
+                alert('Please select both Word and Excel files');
+                return;
+            }
+            
+            addLog('Step 3: Starting full workflow...');
+            showLoading(3);
+            
+            const formData = new FormData();
+            formData.append('docx_file', docxFile);
+            formData.append('excel_file', excelFile);
+            
+            try {
+                const response = await fetch('/step3_full_workflow', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addLog(`Step 3: Success! Made ${data.results_count} updates`, 'success');
+                    
+                    let resultsHtml = '<table class="metrics-table"><tr><th>Description</th><th>Confidence</th><th>Original</th><th>Modified</th></tr>';
+                    data.results.forEach(result => {
+                        const confidenceClass = result.confidence >= 0.8 ? 'confidence-high' : 
+                                               result.confidence >= 0.6 ? 'confidence-medium' : 'confidence-low';
+                        const confidenceBadge = `<span class="confidence-badge ${confidenceClass}">${(result.confidence * 100).toFixed(0)}%</span>`;
+                        
+                        resultsHtml += `
+                            <tr>
+                                <td>${result.description}</td>
+                                <td>${confidenceBadge}</td>
+                                <td>${result.original.substring(0, 100)}...</td>
+                                <td>${result.modified.substring(0, 100)}...</td>
+                            </tr>
+                        `;
+                    });
+                    resultsHtml += '</table>';
+                    
+                    const content = `
+                        <p><strong>✅ Processing complete!</strong></p>
+                        <p>Updates Made: ${data.results_count}</p>
+                        <button class="btn btn-primary" onclick="window.location.href='/download'">Download Updated Document</button>
+                        ${resultsHtml}
+                    `;
+                    showResult(3, content);
+                } else {
+                    throw new Error(data.error || 'Unknown error');
+                }
+            } catch (error) {
+                addLog(`Step 3: Error - ${error.message}`, 'error');
+                showResult(3, `<p><strong>❌ Error:</strong> ${error.message}</p>`, true);
+            }
+        }
+        
+        // Initialize
+        addLog('Debug interface ready. Start with Step 1 to convert Excel to image.');
+    </script>
+</body>
+</html>
+
