@@ -23,8 +23,12 @@ def setup_logging(level=logging.WARNING):
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
-    logging.getLogger("funnels").setLevel(logging.WARNING)
+    # logging.getLogger("funnels").setLevel(logging.WARNING)  # Commented out for debugging
     logging.getLogger("RAG").setLevel(logging.WARNING)
+    
+    # Enable detailed logging for our modules
+    logging.getLogger("utils.document_processing.processor").setLevel(level)
+    logging.getLogger("funnels.llm_provider").setLevel(level)
     
     # Set up application logger with minimal formatting
     logger = logging.getLogger("numaira")

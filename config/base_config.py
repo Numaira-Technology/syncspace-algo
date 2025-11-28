@@ -15,8 +15,8 @@ class BaseConfig:
             "similarity_threshold": 0.4
         },
         "llm": {
-            "provider": "qwen",
-            "model": "Qwen2.5-72B-Instruct",
+            "provider": "openrouter",
+            "model": "google/gemini-3-pro-preview",
             "timeout": 30
         }
     }

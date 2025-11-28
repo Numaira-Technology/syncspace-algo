@@ -46,7 +46,7 @@ app = Flask(__name__)
 app.secret_key = 'your-fixed-secret-key-here'  # Change this in production
 
 # Set up logging
-logger = setup_logging(level=logging.INFO)
+logger = setup_logging(level=logging.DEBUG)  # Changed to DEBUG for detailed logging
 
 # Configure upload folder
 UPLOAD_FOLDER = 'uploads'

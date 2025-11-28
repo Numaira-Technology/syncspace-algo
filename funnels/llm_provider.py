@@ -1,10 +1,8 @@
-from abc import ABC, abstractmethod
 from typing import List, Dict, Tuple, Optional, Any
 import os
 from dotenv import load_dotenv
-from anthropic import Anthropic
-import requests
-import json
+from openai import OpenAI
+import httpx
 import logging
 from config import Config
 
@@ -12,25 +10,160 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-class LLMProvider(ABC):
-    """Base class for LLM providers."""
+class OpenRouterProvider:
+    """OpenRouter provider using OpenAI SDK with OpenRouter base URL."""
     
-    @abstractmethod
-    def analyze_text(self, text: str, timeout: Optional[int] = None) -> Dict[str, Any]:
-        """Analyze text using LLM.
+    def __init__(self, model: str, timeout: int = 30):
+        """Initialize OpenRouter provider.
+        
+        Args:
+            model: Model identifier (e.g., "google/gemini-3-pro-preview")
+            timeout: Default timeout in seconds
+        """
+        api_key = os.getenv('OPENROUTER_API_KEY')
+        if not api_key:
+            raise ValueError("OPENROUTER_API_KEY environment variable not found")
+        
+        self.model = model
+        self.default_timeout = timeout
+        
+        # Create a custom httpx client without proxies parameter
+        # This avoids compatibility issues with httpx 0.28+
+        http_client = httpx.Client(
+            timeout=httpx.Timeout(timeout=timeout, connect=5.0)
+        )
+        
+        # Initialize OpenAI client with custom http_client
+        self.client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+            http_client=http_client
+        )
+    
+    def _call_openrouter(self, messages: list, max_tokens: int = 200, timeout: Optional[int] = None) -> str:
+        """Call OpenRouter API with proper error handling and logging.
+        
+        Args:
+            messages: List of message dictionaries
+            max_tokens: Maximum tokens to generate
+            timeout: Timeout in seconds (defaults to self.default_timeout)
+            
+        Returns:
+            Generated text or "none" on error/timeout
+        """
+        if timeout is None:
+            timeout = self.default_timeout
+        
+        try:
+            logger.debug(f"Calling OpenRouter API with model {self.model}")
+            logger.debug(f"Messages being sent: {messages}")
+            logger.debug(f"Max tokens: {max_tokens}, Temperature: 0, Timeout: {timeout}")
+            
+            # Check if this is a reasoning model (Gemini 3 Pro Preview or DeepSeek)
+            extra_body = {}
+            if "gemini-3-pro-preview" in self.model.lower() or "deepseek" in self.model.lower():
+                extra_body = {"reasoning": {"enabled": True}}
+                logger.debug(f"Enabling reasoning mode for model: {self.model}")
+            
+            # Use the single client instance - timeout is handled by the API call itself
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=0,
+                timeout=timeout,  # Pass timeout to the API call, not the client
+                extra_headers={
+                    "HTTP-Referer": "https://github.com/syncspace-algo",
+                    "X-Title": "SyncSpace Algo"
+                },
+                extra_body=extra_body if extra_body else None
+            )
+            
+            if response.choices and len(response.choices) > 0:
+                choice = response.choices[0]
+                logger.debug(f"Finish reason: {choice.finish_reason}")
+                
+                text = choice.message.content
+                
+                # For reasoning models, check if reasoning_details are present
+                if hasattr(choice.message, 'reasoning_details') and choice.message.reasoning_details:
+                    logger.debug(f"Reasoning model detected - has reasoning_details")
+                    logger.debug(f"Reasoning details: {str(choice.message.reasoning_details)[:200]}...")
+                
+                if text is None or text == "":
+                    logger.warning(f"Empty or invalid response from API: content is None or empty")
+                    logger.warning(f"Finish reason: {choice.finish_reason}")
+                    logger.warning(f"Message object: {choice.message}")
+                    
+                    # Check if there's a refusal or other message fields
+                    if hasattr(choice.message, 'refusal') and choice.message.refusal:
+                        logger.error(f"Model refused to respond: {choice.message.refusal}")
+                    
+                    return "none"
+                
+                # Log the raw response before any processing
+                logger.debug(f"Raw API response content: '{text}'")
+                logger.debug(f"Response length: {len(text)} characters")
+                    
+                text = text.strip()
+                logger.debug(f"After strip: '{text}' (length: {len(text)})")
+                
+                # Clean up the response by removing [] and extra whitespace
+                text = text.replace('[]', '').strip()
+                logger.debug(f"After cleanup: '{text}' (length: {len(text)})")
+                
+                if text:
+                    logger.debug(f"Processed response text: {text[:100]}...")
+                    return text
+                else:
+                    logger.warning(f"Empty or invalid response from API: text is empty after cleanup")
+                    logger.warning(f"Original content was: '{response.choices[0].message.content}'")
+                    return "none"
+            
+            logger.warning(f"Empty or invalid response from API: no choices (got {len(response.choices) if response.choices else 0} choices)")
+            return "none"
+            
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Error calling OpenRouter API: {error_msg}")
+            
+            # If it's a 404 model not found error, provide helpful suggestions
+            if "404" in error_msg and "No endpoints found" in error_msg:
+                logger.error(f"Model '{self.model}' not found on OpenRouter.")
+                logger.error("Common valid models include:")
+                logger.error("  - google/gemini-3-pro-preview (reasoning model)")
+                logger.error("  - deepseek/deepseek-chat-v3.1 (reasoning model, fallback)")
+                logger.error("  - google/gemini-pro-1.5")
+                logger.error("  - anthropic/claude-3-haiku")
+                logger.error("  - meta-llama/llama-3.1-8b-instruct:free")
+                logger.error("Please check https://openrouter.ai/models for available models")
+            
+            import traceback
+            logger.debug(traceback.format_exc())
+            return "none"
+    
+    def analyze_text(self, text: str, timeout: Optional[int] = None, max_tokens: int = 200) -> Dict[str, Any]:
+        """Analyze text using OpenRouter.
         
         Args:
             text: Text to analyze
             timeout: Optional timeout in seconds
+            max_tokens: Maximum tokens for the response (default: 200)
             
         Returns:
             Dict with analysis results
         """
-        pass
+        messages = [
+            {
+                "role": "user",
+                "content": text
+            }
+        ]
+        response = self._call_openrouter(messages, max_tokens=max_tokens, timeout=timeout)
+        return {"analysis": response} if response and response != "none" else {}
         
-    @abstractmethod
     def compare_text(self, text1: str, text2: str, timeout: Optional[int] = None) -> Dict[str, Any]:
-        """Compare two pieces of text.
+        """Compare two pieces of text using OpenRouter.
         
         Args:
             text1: First text
@@ -40,11 +173,25 @@ class LLMProvider(ABC):
         Returns:
             Dict with comparison results including confidence score
         """
-        pass
+        prompt = f"""Compare these two pieces of text semantically:
+
+Text 1: {text1}
+Text 2: {text2}
+
+Are they referring to the same thing? Output format:
+{{"match": true/false, "confidence": 0.0-1.0}}"""
+
+        messages = [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+        response = self._call_openrouter(messages, max_tokens=200, timeout=timeout)
+        return response if response and response != "none" else {"match": False, "confidence": 0.0}
         
-    @abstractmethod
     def update_text(self, text: str, metric: str, values: Dict[str, float], timeout: Optional[int] = None) -> str:
-        """Update text with new values.
+        """Update text with new values using OpenRouter.
         
         Args:
             text: Original text
@@ -55,54 +202,6 @@ class LLMProvider(ABC):
         Returns:
             Updated text
         """
-        pass
-
-class ClaudeProvider(LLMProvider):
-    def __init__(self):
-        api_key = os.getenv('CLAUDE_API_KEY')
-        if not api_key:
-            raise ValueError("CLAUDE_API_KEY environment variable not found")
-        self.client = Anthropic(api_key=api_key)
-    
-    def analyze_text(self, text: str, timeout: Optional[int] = None) -> Dict[str, Any]:
-        """Analyze text using Claude."""
-        try:
-            response = self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=200,
-                temperature=0,
-                messages=[{
-                    "role": "user",
-                    "content": text
-                }]
-            )
-            return {"analysis": response.content[0].text}
-        except Exception as e:
-            raise RuntimeError(f"Error calling Claude API: {str(e)}")
-            
-    def compare_text(self, text1: str, text2: str, timeout: Optional[int] = None) -> Dict[str, Any]:
-        """Compare two pieces of text using Claude."""
-        prompt = f"""Compare these two pieces of text semantically:
-
-Text 1: {text1}
-Text 2: {text2}
-
-Are they referring to the same thing? Output format:
-{{"match": true/false, "confidence": 0.0-1.0}}"""
-
-        try:
-            response = self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=200,
-                temperature=0,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return response.content[0].text
-        except Exception as e:
-            raise RuntimeError(f"Error calling Claude API: {str(e)}")
-            
-    def update_text(self, text: str, metric: str, values: Dict[str, float], timeout: Optional[int] = None) -> str:
-        """Update text with new values using Claude."""
         values_str = ", ".join(f"{k}: {v}" for k, v in values.items())
         prompt = f"""Update this text by replacing the values for the metric "{metric}" with these new values:
 {values_str}
@@ -111,130 +210,18 @@ Text: {text}
 
 Output only the updated text."""
 
-        try:
-            response = self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=200,
-                temperature=0,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return response.content[0].text
-        except Exception as e:
-            raise RuntimeError(f"Error calling Claude API: {str(e)}")
-
-class QwenProvider(LLMProvider):
-    def __init__(self):
-        self.api_key = os.getenv('QWEN_API_KEY')
-        if not self.api_key:
-            raise ValueError("QWEN_API_KEY environment variable not found")
-        self.api_url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
-        self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-    
-    def _call_qwen(self, prompt: str, max_tokens: int = 100, timeout: int = 30) -> str:
-        """Call Qwen API with proper error handling and logging.
-        
-        Args:
-            prompt: Prompt text to send
-            max_tokens: Maximum tokens to generate
-            timeout: Timeout in seconds (default: 30)
-            
-        Returns:
-            Generated text or "none" on error/timeout
-        """
-        logger = logging.getLogger(__name__)
-        
-        payload = {
-            "model": "qwen2.5-72b-instruct",  # Using specified model version
-            "input": {
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "You are a rigorous financial analyst."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ]
-            },
-            "parameters": {
-                "max_tokens": max_tokens,
-                "temperature": 0,
-                "result_format": "text"
+        messages = [
+            {
+                "role": "user",
+                "content": prompt
             }
-        }
-        
-        try:
-            logger.debug(f"Calling Qwen API with prompt: {prompt[:100]}...")
-            response = requests.post(
-                self.api_url,
-                headers=self.headers,
-                json=payload,
-                timeout=timeout
-            )
-            response.raise_for_status()
-            result = response.json()
-            logger.debug(f"Received API response: {result}")
-            
-            if 'output' in result and 'text' in result['output']:
-                text = result['output']['text'].strip()
-                # Clean up the response by removing [] and extra whitespace
-                text = text.replace('[]', '').strip()
-                if text:
-                    logger.debug(f"Processed response text: {text}")
-                    return text
-            
-            logger.warning("Empty or invalid response from API")
-            return "none"
-            
-        except requests.Timeout:
-            logger.warning(f"Timeout ({timeout}s) exceeded calling Qwen API")
-            return "none"
-        except requests.exceptions.RequestException as e:
-            logger.error(f"HTTP error calling Qwen API: {str(e)}")
-            return "none"
-        except ValueError as e:
-            logger.error(f"JSON decode error in Qwen API response: {str(e)}")
-            return "none"
-        except Exception as e:
-            logger.error(f"Unexpected error calling Qwen API: {str(e)}")
-            return "none"
-    
-    def analyze_text(self, text: str, timeout: Optional[int] = None) -> Dict[str, Any]:
-        """Analyze text using Qwen."""
-        response = self._call_qwen(text, max_tokens=200, timeout=timeout)
-        return {"analysis": response} if response else {}
-        
-    def compare_text(self, text1: str, text2: str, timeout: Optional[int] = None) -> Dict[str, Any]:
-        """Compare two pieces of text using Qwen."""
-        prompt = f"""Compare these two pieces of text semantically:
-
-Text 1: {text1}
-Text 2: {text2}
-
-Are they referring to the same thing? Output format:
-{{"match": true/false, "confidence": 0.0-1.0}}"""
-
-        response = self._call_qwen(prompt, max_tokens=200, timeout=timeout)
-        return response if response else {"match": False, "confidence": 0.0}
-        
-    def update_text(self, text: str, metric: str, values: Dict[str, float], timeout: Optional[int] = None) -> str:
-        """Update text with new values using Qwen."""
-        values_str = ", ".join(f"{k}: {v}" for k, v in values.items())
-        prompt = f"""Update this text by replacing the values for the metric "{metric}" with these new values:
-{values_str}
-
-Text: {text}
-
-Output only the updated text."""
-
-        response = self._call_qwen(prompt, max_tokens=200, timeout=timeout)
-        return response if response else text
+        ]
+        response = self._call_openrouter(messages, max_tokens=200, timeout=timeout)
+        return response if response and response != "none" else text
 
 class LLMProvider:
+    """Wrapper class for LLM provider that uses OpenRouter."""
+    
     def __init__(self, provider: str = None):
         config = Config()
         llm_config = config.get_model_config()["llm"]
@@ -242,18 +229,16 @@ class LLMProvider:
         self.model = llm_config["model"]
         self.default_timeout = llm_config["timeout"]
         
-        if self.provider == "claude":
-            self._provider = ClaudeProvider()
-        elif self.provider == "qwen":
-            self._provider = QwenProvider()
+        if self.provider == "openrouter":
+            self._provider = OpenRouterProvider(self.model, self.default_timeout)
         else:
-            raise ValueError(f"Unsupported provider: {self.provider}")
+            raise ValueError(f"Unsupported provider: {self.provider}. Only 'openrouter' is supported.")
     
-    def analyze_text(self, text: str, timeout: Optional[int] = None) -> Dict[str, Any]:
+    def analyze_text(self, text: str, timeout: Optional[int] = None, max_tokens: int = 200) -> Dict[str, Any]:
         """Analyze text using the configured provider."""
         if timeout is None:
             timeout = self.default_timeout
-        return self._provider.analyze_text(text, timeout)
+        return self._provider.analyze_text(text, timeout, max_tokens)
     
     def compare_text(self, text1: str, text2: str, timeout: Optional[int] = None) -> Dict[str, Any]:
         """Compare two pieces of text using the configured provider."""
@@ -296,16 +281,27 @@ Target Metrics:
 Output only the matching metrics as a comma-separated list. If no matches, output: none"""
 
         try:
+            logger.debug(f"batch_check_metrics called with sentence: '{sentence[:100]}...'")
+            logger.debug(f"Target metrics: {target_metrics}")
+            
             result = self._provider.analyze_text(prompt, timeout)
+            logger.debug(f"analyze_text returned: {result}")
+            
             text_response = result.get("analysis", "none").strip().lower()
+            logger.debug(f"text_response after processing: '{text_response}'")
             
             if text_response == "none":
+                logger.debug("No metrics found (response was 'none')")
                 return []
                 
-            return [m.strip() for m in text_response.split(",")]
+            matched_metrics = [m.strip() for m in text_response.split(",")]
+            logger.debug(f"Matched metrics: {matched_metrics}")
+            return matched_metrics
             
         except Exception as e:
             logger.error(f"Error in batch_check_metrics: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             return []
 
 def get_llm_provider(provider: str = None) -> LLMProvider:

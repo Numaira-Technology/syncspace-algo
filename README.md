@@ -12,9 +12,11 @@ This system automatically updates financial documents by matching and replacing 
    - Processor (`utils/document_processing/processor.py`): Orchestrates matching and updates
 
 2. **LLM Integration**
-   - Multiple Provider Support:
-     - Claude (Anthropic)
-     - Qwen (Default)
+   - OpenRouter Integration:
+     - Google Gemini 3 Pro Preview (Default - reasoning model)
+     - DeepSeek Chat v3.1 (Fallback reasoning model)
+     - Access to 100+ models via unified API
+   - Reasoning mode enabled for advanced analysis
    - Configurable timeout and model settings
    - Handles text analysis and verification
 
@@ -55,9 +57,7 @@ pip install -r requirements.txt
 ### Configuration
 Set up environment variables:
 ```bash
-LLM_PROVIDER=qwen # or claude
-QWEN_API_KEY=sk-xxx  # Your API key
-CLAUDE_API_KEY=sk-xxx  # Your API key
+OPENROUTER_API_KEY=sk-xxx  # Your OpenRouter API key
 ```
 
 ### Running

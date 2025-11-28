@@ -86,11 +86,17 @@ def process_files(docx_path: str, excel_path: str, timeout: int = None) -> List[
         # Process each sentence
         results = []
         print("\nProcessing sentences...")
+        logger.info(f"Total sentences to process: {len(sentences)}")
+        
         for sentence in tqdm(sentences.values(), desc="Analyzing", unit="sentence"):
             # Find exact matches in sentence
             matches = find_exact_matches(sentence, excel_data)
             if not matches:
+                logger.debug(f"No matches found for sentence: '{sentence[:50]}...'")
                 continue
+            
+            logger.info(f"Found {len(matches)} matches for sentence: '{sentence[:50]}...'")
+            logger.debug(f"Matches: {matches}")
             
             # Use LLM to update sentence with new values
             prompt = f"""Update this sentence with the new values from Excel:
@@ -109,11 +115,20 @@ Rules:
 Output only the updated sentence."""
 
             try:
-                updated_text = llm.analyze_text(prompt, timeout)
+                # Use higher max_tokens for reasoning models to accommodate both reasoning and output
+                updated_text = llm.analyze_text(prompt, timeout, max_tokens=1000)
+                logger.debug(f"LLM response type: {type(updated_text)}, value: {updated_text}")
+                
                 if isinstance(updated_text, dict):
                     updated_text = updated_text.get("analysis", sentence)
+                    logger.debug(f"Extracted analysis from dict: '{updated_text}'")
                 
-                if updated_text and updated_text != sentence:
+                # Clean up the response
+                if updated_text:
+                    updated_text = str(updated_text).strip()
+                    logger.debug(f"After cleanup: '{updated_text}'")
+                
+                if updated_text and updated_text != "none" and updated_text != sentence:
                     # Calculate confidence for each match
                     match_confidences = [
                         calculate_confidence(sentence, header, values, updated_text, len(matches))
@@ -122,15 +137,27 @@ Output only the updated sentence."""
                     # Use average confidence if multiple matches
                     confidence = sum(match_confidences) / len(match_confidences)
                     
+                    logger.info(f"Adding result: Original: '{sentence[:50]}...', Modified: '{updated_text[:50]}...', Confidence: {confidence:.2f}")
                     results.append((
                         sentence,
                         updated_text,
                         confidence
                     ))
+                else:
+                    logger.warning(f"Skipping sentence - updated_text: '{updated_text}', original: '{sentence[:50]}...'")
                     
             except Exception as e:
                 logger.error(f"Error updating sentence: {str(e)}")
                 continue
+        
+        logger.info(f"Processing complete. Total results: {len(results)}")
+        if results:
+            logger.info("Sample result:")
+            logger.info(f"  Original: {results[0][0][:100]}...")
+            logger.info(f"  Modified: {results[0][1][:100]}...")
+            logger.info(f"  Confidence: {results[0][2]:.2f}")
+        else:
+            logger.warning("No results generated! This means no sentences were successfully updated.")
         
         return results
             
