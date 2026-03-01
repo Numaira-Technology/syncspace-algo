@@ -6,6 +6,7 @@ Uses vision models to extract structured financial data from Excel images.
 
 import logging
 import json
+import time
 from typing import Dict, Any, Optional
 from funnels.llm_provider import LLMProvider
 
@@ -96,9 +97,11 @@ IMPORTANT RULES:
 If the image contains a table with data, you MUST extract it. Do not return empty metrics."""
 
         try:
-            # Use max tokens close to model limit (262K total context)
-            # Reserve ~5K for input (prompt + image), use rest for output
-            result = self.llm.analyze_image(prompt, image_base64, timeout=timeout, max_tokens=257000)
+            logger.info(f"Calling vision model (image base64 length: {len(image_base64)} chars, timeout: {timeout}s, max_tokens: 4096)")
+            t0 = time.time()
+            result = self.llm.analyze_image(prompt, image_base64, timeout=timeout, max_tokens=4096)
+            elapsed = time.time() - t0
+            logger.info(f"Vision model responded in {elapsed:.2f}s")
             response_text = result.get("analysis", "")
             
             if not response_text or response_text == "none":

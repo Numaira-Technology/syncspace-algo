@@ -337,7 +337,7 @@ def download_docx():
     if not document_info:
         logger.warning("No document info in session")
         flash('No updated document available for download. Please process a document first.')
-        return redirect(url_for('upload_file'))
+        return redirect(url_for('index'))
     
     updated_path = document_info.get('updated_path')
     filename = document_info.get('filename')
@@ -363,11 +363,11 @@ def download_docx():
         except Exception as e:
             logger.error(f"Error downloading file: {str(e)}", exc_info=True)
             flash(f'Error downloading file: {str(e)}')
-            return redirect(url_for('upload_file'))
+            return redirect(url_for('index'))
     else:
         logger.warning(f"File not found at path: {updated_path}")
         flash('No updated document available for download. Please process a document first.')
-        return redirect(url_for('upload_file'))
+        return redirect(url_for('index'))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)               

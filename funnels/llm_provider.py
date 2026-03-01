@@ -13,23 +13,21 @@ logger = logging.getLogger(__name__)
 class OpenRouterProvider:
     """OpenRouter provider using OpenAI SDK with OpenRouter base URL."""
     
-    def __init__(self, model: str, timeout: int = 30, fallback_model: Optional[str] = None):
+    def __init__(self, model: str, timeout: int = 30, vision_model: Optional[str] = None):
         """Initialize OpenRouter provider.
         
         Args:
-            model: Model identifier (e.g., "google/gemini-3-pro-preview")
+            model: Text-only model identifier (e.g., "qwen/qwen-plus")
             timeout: Default timeout in seconds
-            fallback_model: Optional fallback model for geo-restrictions
+            vision_model: Vision model for image OCR tasks (e.g., "qwen/qwen-vl-max")
         """
         api_key = os.getenv('OPENROUTER_API_KEY')
         if not api_key:
             raise ValueError("OPENROUTER_API_KEY environment variable not found")
         
         self.model = model
-        self.fallback_model = fallback_model
-        self.current_model = model  # Track which model is currently in use
+        self.vision_model = vision_model
         self.default_timeout = timeout
-        self.geo_restricted = False  # Flag to track if primary model is geo-restricted
         
         # Create a custom httpx client without proxies parameter
         # This avoids compatibility issues with httpx 0.28+
@@ -44,20 +42,19 @@ class OpenRouterProvider:
             http_client=http_client
         )
         
-        logger.info(f"Initialized OpenRouter with primary model: {model}")
-        if fallback_model:
-            logger.info(f"Fallback model configured: {fallback_model}")
+        logger.info(f"Initialized OpenRouter with text model: {model}")
+        if vision_model:
+            logger.info(f"Vision model configured: {vision_model}")
     
-    def _call_openrouter(self, messages: list, max_tokens: int = 200, timeout: Optional[int] = None, 
-                        image_base64: Optional[str] = None, retry_with_fallback: bool = True) -> str:
-        """Call OpenRouter API with proper error handling and automatic fallback.
+    def _call_openrouter(self, messages: list, max_tokens: int = 200, timeout: Optional[int] = None,
+                        image_base64: Optional[str] = None) -> str:
+        """Call OpenRouter API with proper error handling.
         
         Args:
             messages: List of message dictionaries
             max_tokens: Maximum tokens to generate
             timeout: Timeout in seconds (defaults to self.default_timeout)
-            image_base64: Optional base64 encoded image for vision models
-            retry_with_fallback: Whether to retry with fallback model on geo-restriction
+            image_base64: Optional base64 encoded image; triggers use of vision_model
             
         Returns:
             Generated text or "none" on error/timeout
@@ -91,25 +88,15 @@ class OpenRouterProvider:
             messages = vision_messages
             logger.debug("Formatted messages for vision model with image")
         
-        # Use fallback model if primary is geo-restricted OR if this is a vision task
-        model_to_use = self.current_model
-        
-        logger.warning(f"🔍 MODEL SELECTION - Initial model: {model_to_use}, Is vision task: {bool(image_base64)}")
-        
-        # CRITICAL: ALWAYS use fallback model (Qwen) for vision tasks
-        # Vision models work better with non-reasoning models
-        if image_base64:
-            if self.fallback_model:
-                logger.warning(f"✅ VISION TASK - Switching to fallback model: {self.fallback_model}")
-                model_to_use = self.fallback_model
-            else:
-                logger.warning(f"⚠️ Vision task detected but no fallback model configured!")
-                logger.warning(f"Using primary model '{model_to_use}' - this may not work optimally")
-        elif self.geo_restricted and self.fallback_model:
-            model_to_use = self.fallback_model
-            logger.warning(f"Using fallback model due to geo-restriction: {model_to_use}")
-        
-        logger.warning(f"🎯 FINAL MODEL: {model_to_use}")
+        # Select model: use vision_model for image tasks, text model otherwise
+        if image_base64 and self.vision_model:
+            model_to_use = self.vision_model
+            logger.info(f"Vision task — using vision model: {model_to_use}")
+        else:
+            model_to_use = self.model
+            if image_base64:
+                logger.warning("Vision task but no vision_model configured — falling back to text model")
+            logger.info(f"Text task — using model: {model_to_use}")
         
         try:
             logger.debug(f"Calling OpenRouter API with model {model_to_use}")
@@ -184,8 +171,7 @@ class OpenRouterProvider:
                 text = text.strip()
                 logger.debug(f"After strip: '{text}' (length: {len(text)})")
                 
-                # Clean up the response by removing [] and extra whitespace
-                text = text.replace('[]', '').strip()
+                text = text.strip()
                 logger.debug(f"After cleanup: '{text}' (length: {len(text)})")
                 
                 if text:
@@ -212,28 +198,12 @@ class OpenRouterProvider:
                 logger.error("  - anthropic/claude-3.5-sonnet:beta (no geo-restrictions)")
                 logger.error("Please check https://openrouter.ai/models for available models")
             
-            elif "User location is not supported" in error_msg or "FAILED_PRECONDITION" in error_msg:
-                logger.warning(f"GEO-RESTRICTION DETECTED: Model '{model_to_use}' is not available in your location.")
-                
-                # Automatic fallback if available and not already using fallback
-                if self.fallback_model and not self.geo_restricted and retry_with_fallback:
-                    logger.info(f"Automatically switching to fallback model: {self.fallback_model}")
-                    self.geo_restricted = True
-                    self.current_model = self.fallback_model
-                    
-                    # Retry with fallback model
-                    return self._call_openrouter(
-                        messages, 
-                        max_tokens=max_tokens, 
-                        timeout=timeout, 
-                        image_base64=image_base64,
-                        retry_with_fallback=False  # Prevent infinite recursion
-                    )
-                else:
-                    logger.error("No fallback model available or fallback already failed.")
-                    logger.error("SOLUTION: Configure a fallback model in config/base_config.py:")
-                    logger.error("  'fallback_model': 'qwen/qwen3-vl-8b-thinking' (recommended)")
-                    logger.error("  'fallback_model': 'anthropic/claude-3-haiku' (alternative)")
+            elif ("User location is not supported" in error_msg or "FAILED_PRECONDITION" in error_msg
+                  or ("403" in error_msg and "not available in your region" in error_msg)):
+                logger.error(
+                    f"GEO-RESTRICTION: Model '{model_to_use}' is not available in your region. "
+                    "Update model/vision_model in config/base_config.py to a non-geo-restricted model."
+                )
             
             elif "400" in error_msg or "Bad Request" in error_msg:
                 logger.error("Bad Request - possible causes:")
@@ -267,14 +237,14 @@ class OpenRouterProvider:
         return {"analysis": response} if response and response != "none" else {}
     
     def analyze_image(self, prompt: str, image_base64: str, timeout: Optional[int] = None, 
-                     max_tokens: int = 257000) -> Dict[str, Any]:
+                     max_tokens: int = 4096) -> Dict[str, Any]:
         """Analyze an image using vision model.
         
         Args:
             prompt: Text prompt describing what to analyze
             image_base64: Base64 encoded image
             timeout: Optional timeout in seconds
-            max_tokens: Maximum tokens for output (default: 257K, near model's 262K limit)
+            max_tokens: Maximum tokens for output
             
         Returns:
             Dict with analysis results
@@ -354,14 +324,14 @@ class LLMProvider:
         llm_config = config.get_model_config()["llm"]
         self.provider = provider or llm_config["provider"]
         self.model = llm_config["model"]
-        self.fallback_model = llm_config.get("fallback_model")
+        self.vision_model = llm_config.get("vision_model")
         self.default_timeout = llm_config["timeout"]
         
         if self.provider == "openrouter":
             self._provider = OpenRouterProvider(
-                self.model, 
-                self.default_timeout, 
-                fallback_model=self.fallback_model
+                self.model,
+                self.default_timeout,
+                vision_model=self.vision_model
             )
         else:
             raise ValueError(f"Unsupported provider: {self.provider}. Only 'openrouter' is supported.")

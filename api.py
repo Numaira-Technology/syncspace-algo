@@ -6,7 +6,10 @@ from tempfile import NamedTemporaryFile
 from main import main as process_documents
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List
+from typing import List, Dict, Any, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Document Processing API",
@@ -16,7 +19,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://numaira.app"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -82,6 +85,115 @@ async def process_documents_endpoint(
         if tmp_excel_path and os.path.exists(tmp_excel_path):
             os.unlink(tmp_excel_path)
 
+class JsonSyncspaceRequest(BaseModel):
+    docx_data: Dict[str, Any]
+    excel_data: Dict[str, Any]
+
+
+@app.post("/run-syncspace-json/",
+    responses={500: {"model": ErrorResponse}}
+)
+async def process_documents_json_endpoint(request: JsonSyncspaceRequest):
+    """
+    Process pre-extracted document data directly without file uploads.
+
+    Accepts:
+        docx_data: { "data": { "sentence1": "...", "sentence2": "..." } }
+        excel_data: { "data": [ { "row_header": "...", "values": { "year": value } }, ... ] }
+
+    Returns the same response format as /run-syncspace/.
+    """
+    try:
+        from utils.document_processing.vision_processor import analyze_and_update_document_from_json
+
+        word_sentences = request.docx_data.get("data", {})
+        excel_rows = request.excel_data.get("data", [])
+
+        logger.info(f"[json endpoint] word sentences: {len(word_sentences)}, excel rows: {len(excel_rows)}")
+
+        results = analyze_and_update_document_from_json(word_sentences, excel_rows)
+
+        return JSONResponse(content={
+            "status": "success",
+            "data": {
+                "number_of_changes": len(results),
+                "results": [
+                    {
+                        "original_text": orig,
+                        "modified_text": mod,
+                        "confidence": float(conf),
+                        "description": desc
+                    } for orig, mod, conf, desc in results
+                ]
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error in json endpoint: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e)}
+        )
+
+
+class ImageSyncspaceRequest(BaseModel):
+    docx_image: str   # base64 PNG of the rendered Word document
+    excel_image: str  # base64 PNG of the rendered Excel sheet
+
+
+@app.post("/run-syncspace-images/",
+    responses={500: {"model": ErrorResponse}}
+)
+async def process_images_endpoint(request: ImageSyncspaceRequest):
+    """
+    Process Word and Excel files sent as base64 PNG images.
+
+    Uses a vision LLM to OCR both images, extracts meaningful content and
+    financial data, then runs the standard text-LLM update analysis.
+
+    Accepts:
+        docx_image: base64-encoded PNG of the Word document
+        excel_image: base64-encoded PNG of the Excel sheet
+
+    Returns the same response format as /run-syncspace/.
+    """
+    try:
+        from utils.document_processing.vision_processor import analyze_and_update_from_images
+
+        logger.info(
+            f"[images endpoint] docx_image size: {len(request.docx_image)} chars, "
+            f"excel_image size: {len(request.excel_image)} chars"
+        )
+
+        results = analyze_and_update_from_images(request.docx_image, request.excel_image)
+
+        return JSONResponse(content={
+            "status": "success",
+            "data": {
+                "number_of_changes": len(results),
+                "results": [
+                    {
+                        "original_text": orig,
+                        "modified_text": mod,
+                        "confidence": float(conf),
+                        "description": desc
+                    } for orig, mod, conf, desc in results
+                ]
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error in images endpoint: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e)}
+        )
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)

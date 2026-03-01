@@ -16,8 +16,8 @@ class BaseConfig:
         },
         "llm": {
             "provider": "openrouter",
-            "model": "google/gemini-3-pro-preview",  # Default: Gemini 3 (best quality)
-            "fallback_model": "qwen/qwen3-vl-8b-instruct",  # Fallback for geo-restrictions (no thinking mode)
+            "model": "qwen/qwen-plus",          # text LLM for analysis/update calls
+            "vision_model": "qwen/qwen-vl-max", # vision LLM for OCR of both Word and Excel images
             "timeout": 60
         }
     }
