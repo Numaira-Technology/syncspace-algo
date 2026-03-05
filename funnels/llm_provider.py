@@ -171,9 +171,6 @@ class OpenRouterProvider:
                 text = text.strip()
                 logger.debug(f"After strip: '{text}' (length: {len(text)})")
                 
-                text = text.strip()
-                logger.debug(f"After cleanup: '{text}' (length: {len(text)})")
-                
                 if text:
                     logger.debug(f"Processed response text: {text[:100]}...")
                     return text
@@ -234,7 +231,7 @@ class OpenRouterProvider:
             }
         ]
         response = self._call_openrouter(messages, max_tokens=max_tokens, timeout=timeout)
-        return {"analysis": response} if response and response != "none" else {}
+        return {"analysis": response} if response else {}
     
     def analyze_image(self, prompt: str, image_base64: str, timeout: Optional[int] = None, 
                      max_tokens: int = 4096) -> Dict[str, Any]:
@@ -257,7 +254,7 @@ class OpenRouterProvider:
         ]
         response = self._call_openrouter(messages, max_tokens=max_tokens, timeout=timeout, 
                                         image_base64=image_base64)
-        return {"analysis": response} if response and response != "none" else {}
+        return {"analysis": response} if response else {}
         
     def compare_text(self, text1: str, text2: str, timeout: Optional[int] = None) -> Dict[str, Any]:
         """Compare two pieces of text using OpenRouter.
